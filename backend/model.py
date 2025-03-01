@@ -34,9 +34,9 @@ You will decide whether a query is a 'general' query, a 'realtime' query, or is 
 *** Respond with 'general (query)' if you can't decide the kind of query or if a query is asking to perform a task which is not mentioned above. ***
 """
 
-ChatHistory = {
+ChatHistory = [
     {"role" : "User", "message" : "how are you ?"},{"role" : "Chatbot", "message" : "general how are you ?"}, {"role" : "User", "message" : "do you like pizza ?"}, {"role" : "Chatbot", "message" : "general do you like pizza ?"}, {"role" : "User", "message" : "open chrome and tell me about mahatma gandhi."}, {"role" : "Chatbot", "message" : "open chrome, general tell me about mahatma gandhi."}, {"role" : "User", "message" : "open chrome and firefox"}, {"role" : "Chatbot", "message" : "open chrome, open firefox"}, {"role" : "User", "message" : "what is today's date and by the way remind me that i have a dancing performance on 5th august at 11pm"}, {"role" : "Chatbot", "message" : "general what is today's date, reminder 11:00pm 5th august dancing performance"}, {"role" : "User", "message" : "chat with me"}, {"role" : "Chatbot", "message" : "genera chat with me."},
-}
+]
 
 def FirstLayerDMM(prompt: str = "test"):
     message.append({"role": "user","content":f"{prompt}"})
@@ -60,7 +60,7 @@ def FirstLayerDMM(prompt: str = "test"):
 
     for task in response:
         for func in funcs:
-            if task.startwith(func):
+            if task.startswith(func):
                 temp.append(task)
 
     response = temp
