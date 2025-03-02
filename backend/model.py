@@ -1,3 +1,4 @@
+# importring libraries
 import cohere
 from rich import print
 from dotenv import dotenv_values
