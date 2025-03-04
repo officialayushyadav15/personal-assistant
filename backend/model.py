@@ -1,75 +1,131 @@
 import cohere
-from rich import print
-from dotenv import dotenv_values
+import re
+import os
+from functools import lru_cache
+from typing import List
+from dotenv import load_dotenv
 
-env_vars = dotenv_values(".env")
+class DecisionMaker:
+    def __init__(self):
+        self.co = None
+        self._initialize_cohere()
+        self.preamble = self._create_preamble()
+        self.funcs = self._parse_functions_from_preamble()
+        self.chat_history = self._create_chat_history()
 
-CohereAPIKey = env_vars.get("CohereAPIKey")
+    def _initialize_cohere(self):
+        """Initialize Cohere client with API key from .env"""
+        load_dotenv()
+        api_key = os.getenv("CohereAPIKey")
+        if not api_key:
+            raise ValueError("CohereAPIKey not found in .env file")
+        self.co = cohere.Client(api_key=api_key)
 
-co = cohere.Client(api_key=CohereAPIKey)
+    def _create_preamble(self):
+        return """You are a query classifier. Follow these rules strictly:
 
-funcs = [
-    "exit" , "general" , "realtime" , "open" , "close" , "play" , "generate image" , "system" , "content" , "google search" , "youtube search" , "reminder"
-]
+1. SYSTEM COMMANDS (highest priority):
+   - Time/date requests
+   - Volume control
+   - Device operations
+2. EXIT: Only respond with 'exit' for explicit goodbye messages
+3. GREETINGS: Always classify as 'general'
+4. MULTI-COMMANDS: Split requests using 'and' or commas
+5. FUNCTION PRIORITY:
+   - system
+   - open/close [app]
+   - play [song]
+   - reminder [time+message]
+   - generate image [description]
+   - content [topic]
+   - youtube/google search [query]
+6. KNOWLEDGE:
+   - realtime: People/companies, news, current events
+   - general: Concepts, history, how-tos, greetings
+7. PROPER NOUNS: Capitalized names → realtime
+8. DEFAULT: general"""
 
-message = []
+    def _parse_functions_from_preamble(self):
+        return [
+            'system', 'exit', 'open', 'close', 'play',
+            'reminder', 'generate image', 'content',
+            'youtube search', 'google search', 'realtime', 'general'
+        ]
 
-preamble = """
-You are a very accurate Decision-Making Model, which decides what kind of a query is given to you.
-You will decide whether a query is a 'general' query, a 'realtime' query, or is asking to perform any task or automation like 'open facebook, instagram', 'can you write a application and open it in notepad'
-*** Do not answer any query, just decide what kind of query is given to you. ***
--> Respond with 'general ( query )' if a query can be answered by a llm model (conversational ai chatbot) and doesn't require any up to date information like if the query is 'who was akbar?' respond with 'general who was akbar?', if the query is 'how can i study more effectively?' respond with 'general how can i study more effectively?', if the query is 'can you help me with this math problem?' respond with 'general can you help me with this math problem?', if the query is 'Thanks, i really liked it.' respond with 'general thanks, i really liked it.' , if the query is 'what is python programming language?' respond with 'general what is python programming language?', etc. Respond with 'general (query)' if a query doesn't have a proper noun or is incomplete like if the query is 'who is he?' respond with 'general who is he?', if the query is 'what's his networth?' respond with 'general what's his networth?', if the query is 'tell me more about him.' respond with 'general tell me more about him.', and so on even if it require up-to-date information to answer. Respond with 'general (query)' if the query is asking about time, day, date, month, year, etc like if the query is 'what's the time?' respond with 'general what's the time?'.
--> Respond with 'realtime ( query )' if a query can not be answered by a llm model (because they don't have realtime data) and requires up to date information like if the query is 'who is indian prime minister' respond with 'realtime who is indian prime minister', if the query is 'tell me about facebook's recent update.' respond with 'realtime tell me about facebook's recent update.', if the query is 'tell me news about coronavirus.' respond with 'realtime tell me news about coronavirus.', etc and if the query is asking about any individual or thing like if the query is 'who is akshay kumar' respond with 'realtime who is akshay kumar', if the query is 'what is today's news?' respond with 'realtime what is today's news?', if the query is 'what is today's headline?' respond with 'realtime what is today's headline?', etc.
--> Respond with 'open (application name or website name)' if a query is asking to open any application like 'open facebook', 'open telegram', etc. but if the query is asking to open multiple applications, respond with 'open 1st application name, open 2nd application name' and so on.
--> Respond with 'close (application name)' if a query is asking to close any application like 'close notepad', 'close facebook', etc. but if the query is asking to close multiple applications or websites, respond with 'close 1st application name, close 2nd application name' and so on.
--> Respond with 'play (song name)' if a query is asking to play any song like 'play afsanay by ys', 'play let her go', etc. but if the query is asking to play multiple songs, respond with 'play 1st song name, play 2nd song name' and so on.
--> Respond with 'generate image (image prompt)' if a query is requesting to generate a image with given prompt like 'generate image of a lion', 'generate image of a cat', etc. but if the query is asking to generate multiple images, respond with 'generate image 1st image prompt, generate image 2nd image prompt' and so on.
--> Respond with 'reminder (datetime with message)' if a query is requesting to set a reminder like 'set a reminder at 9:00pm on 25th june for my business meeting.' respond with 'reminder 9:00pm 25th june business meeting'.
--> Respond with 'system (task name)' if a query is asking to mute, unmute, volume up, volume down , etc. but if the query is asking to do multiple tasks, respond with 'system 1st task, system 2nd task', etc.
--> Respond with 'content (topic)' if a query is asking to write any type of content like application, codes, emails or anything else about a specific topic but if the query is asking to write multiple types of content, respond with 'content 1st topic, content 2nd topic' and so on.
--> Respond with 'google search (topic)' if a query is asking to search a specific topic on google but if the query is asking to search multiple topics on google, respond with 'google search 1st topic, google search 2nd topic' and so on.
--> Respond with 'youtube search (topic)' if a query is asking to search a specific topic on youtube but if the query is asking to search multiple topics on youtube, respond with 'youtube search 1st topic, youtube search 2nd topic' and so on.
-*** If the query is asking to perform multiple tasks like 'open facebook, telegram and close whatsapp' respond with 'open facebook, open telegram, close whatsapp' ***
-*** If the user is saying goodbye or wants to end the conversation like 'bye jarvis.' respond with 'exit'.***
-*** Respond with 'general (query)' if you can't decide the kind of query or if a query is asking to perform a task which is not mentioned above. ***
-"""
+    def _create_chat_history(self):
+        return [
+            {"role": "User", "message": "What time is it?"},
+            {"role": "Chatbot", "message": "system time"},
+            {"role": "User", "message": "What's today's date?"},
+            {"role": "Chatbot", "message": "system date"},
+            {"role": "User", "message": "Hello!"},
+            {"role": "Chatbot", "message": "general hello"},
+            {"role": "User", "message": "Open Chrome and Notepad"},
+            {"role": "Chatbot", "message": "open chrome, open notepad"},
+            {"role": "User", "message": "Who is Tim Cook?"},
+            {"role": "Chatbot", "message": "realtime tim cook"},
+        ]
 
-ChatHistory = [
-    {"role" : "User", "message" : "how are you ?"},{"role" : "Chatbot", "message" : "general how are you ?"}, {"role" : "User", "message" : "do you like pizza ?"}, {"role" : "Chatbot", "message" : "general do you like pizza ?"}, {"role" : "User", "message" : "open chrome and tell me about mahatma gandhi."}, {"role" : "Chatbot", "message" : "open chrome, general tell me about mahatma gandhi."}, {"role" : "User", "message" : "open chrome and firefox"}, {"role" : "Chatbot", "message" : "open chrome, open firefox"}, {"role" : "User", "message" : "what is today's date and by the way remind me that i have a dancing performance on 5th august at 11pm"}, {"role" : "Chatbot", "message" : "general what is today's date, reminder 11:00pm 5th august dancing performance"}, {"role" : "User", "message" : "chat with me"}, {"role" : "Chatbot", "message" : "genera chat with me."},
-]
+    @lru_cache(maxsize=512)
+    def classify_query(self, prompt: str) -> List[str]:
+        try:
+            response = self.co.chat(
+                model='command-r-plus',
+                message=self._sanitize_input(prompt),
+                temperature=0.4,
+                chat_history=self.chat_history,
+                preamble=self.preamble
+            ).text
+            return self._process_response(response, prompt)
+        except Exception as e:
+            return [f"error: {str(e)}"]
 
-def FirstLayerDMM(prompt: str = "test"):
-    message.append({"role": "user","content":f"{prompt}"})
+    def _sanitize_input(self, text: str) -> str:
+        return text.strip()[:500].replace('\n', ' ')
 
-    stream = co.chat_stream(
-        model = 'command-r-plus', message = prompt, temperature = 0.7, chat_history = ChatHistory, prompt_truncation = 'OFF', connectors = [], preamble = preamble
-    )
+    def _process_response(self, response: str, original_prompt: str) -> List[str]:
+        split_pattern = r'(?:\s+and\s+|\s*,\s*)(?=\b(?:{})\b)'.format('|'.join(self.funcs))
+        commands = re.split(split_pattern, response.strip(), flags=re.IGNORECASE)
+        
+        valid_commands = []
+        for cmd in commands:
+            cmd = cmd.strip().lower()
+            if any(cmd.startswith(f) for f in self.funcs):
+                valid_commands.append(cmd)
+        
+        if not valid_commands and self._has_proper_noun(original_prompt):
+            return [f"realtime {original_prompt.lower()}"]
+            
+        return valid_commands or [f"general {original_prompt.lower()}"]
 
-    response = ""
+    def _has_proper_noun(self, text: str) -> bool:
+        return any(word.istitle() for word in text.split())
 
-    for event in stream:
-        if event.event_type == "text_generation":
-            response += event.text
+def main():
+    try:
+        dm = DecisionMaker()
+        print("AI Classifier Ready. Type 'exit' to quit.\n")
+        
+        while True:
+            try:
+                user_input = input(">>> ").strip()
+                if not user_input:
+                    continue
+                
+                result = dm.classify_query(user_input)
+                
+                if 'exit' in result:
+                    print("Goodbye!")
+                    break
+                
+                print(f"[{'|'.join(result)}]")
 
-    response = response.replace("\n","")
-    response = response.split(",")
+            except KeyboardInterrupt:
+                print("\nExiting...")
+                break
 
-    response = [i.strip() for i in response]
+    except Exception as e:
+        print(f"Initialization failed: {str(e)}")
 
-    temp = []
-
-    for task in response:
-        for func in funcs:
-            if task.startswith(func):
-                temp.append(task)
-
-    response = temp
-    if "(query)" in response:
-        newresponse = FirstLayerDMM(prompt = prompt)
-        return newresponse
-    else:
-        return response
-    
 if __name__ == "__main__":
-    while True:
-        print(FirstLayerDMM(input(">>> ")))
+    main()

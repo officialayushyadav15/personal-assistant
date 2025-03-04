@@ -1,91 +1,130 @@
 from groq import Groq
-from json import load, dump
+import re
+import os
+import json
 import datetime
 from dotenv import dotenv_values
 
 env_vars = dotenv_values(".env")
-
 Username = env_vars.get("Username")
 Assistantname = env_vars.get("Assistantname")
 GroqAPIKey = env_vars.get("GroqAPIKey")
 
-client = Groq(api_key = GroqAPIKey)
+client = Groq(api_key=GroqAPIKey)
 
-message = []
+class EnhancedAssistant:
+    def __init__(self):
+        self.command_prompt = """Classify queries into:
+1. open [app] - Open applications
+2. close [app] - Close applications  
+3. system time - Get current time
+4. system date - Get current date
+5. realtime [query] - Current information
+6. greeting - Simple hello
+7. exit - End conversation
+Respond ONLY with the command format."""
 
-System = f"""Hello, I am {Username}, You are a very accurate and advanced AI chatbot named {Assistantname} which also has real-time up-to-date information from the internet.
-*** Do not tell time until I ask, do not talk too much, just answer the question.***
-*** Reply in only English, even if the question is in Hindi, reply in English.***
-*** Do not provide notes in the output, just answer the question and never mention your training data. ***
-"""
+        self.main_prompt = f"""You are {Assistantname}, a concise AI assistant. Follow:
+- Answer in plain text (NO markdown)
+- Keep responses under 3 sentences
+- Current context: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
+        
+        self.load_history()
 
-SystemChatBot = [{"role": "system", "content": System}]
+    def load_history(self):
+        try:
+            with open("Data/ChatLog.json", "r") as f:
+                self.history = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.history = []
 
-try:
-    with open(r"Data\ChatLog.json", "r") as f:
-        content = f.read().strip()
-        message = load(f) if content else []
-except (FileNotFoundError, json.JSONDecodeError):  # Handle both missing and corrupted files
-    message = []
-    with open(r"Data\ChatLog.json", "w") as f:
-        dump(message, f, indent=4)
+    def save_history(self):
+        with open("Data/ChatLog.json", "w") as f:
+            json.dump(self.history, f, indent=2)
 
+    def classify_query(self, query):
+        try:
+            response = client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=[
+                    {"role": "system", "content": self.command_prompt},
+                    {"role": "user", "content": query}
+                ],
+                temperature=0.2,
+                max_tokens=50
+            )
+            return response.choices[0].message.content.lower().strip()
+        except Exception as e:
+            print(f"Classification error: {e}")
+            return "general"
 
-def RealtimeInformation():
-    current_date_time = datetime.datetime.now()
-    day = current_date_time.strftime("%A")
-    date = current_date_time.strftime("%d")
-    month = current_date_time.strftime("%B")
-    year = current_date_time.strftime("%Y")
-    hour = current_date_time.strftime("%H")
-    minute = current_date_time.strftime("%M")
-    second = current_date_time.strftime("%S")
+    def execute_command(self, command):
+        
+        if command.startswith("system time"):
+            return datetime.datetime.now().strftime("%H:%M:%S")
+        if command.startswith("system date"):
+            return datetime.datetime.now().strftime("%Y-%m-%d")
+            
+        if command == "greeting":
+            return "Hello! How can I assist you today?"
+            
+        return None
 
-    data = f"Please use this real-time information if needed, \n"
-    data += f"Day: {day}\nDate: {date}\nMonth: {month}\nYear: {year}\n"
-    data += f"Time: {hour} hours:{minute} minutes :{second} seconds.\n"
+    def generate_response(self, query):
+        try:
 
-def AnswerModifier(Answer):
-    lines = Answer.split('\n')
-    non_empty_lines = [line for line in lines if line.strip()]
-    modified_answer = '\n'.join(non_empty_lines)
-    return modified_answer
+            command = self.classify_query(query)
+            response = self.execute_command(command)
+            
+            if response:
+                return response
 
-def ChatBot(Query):
-    """This Function sends the user's query to the chatbot and returns the AI's response. """
+            messages = [
+                {"role": "system", "content": self.main_prompt},
+                *self.history[-4:],  # Keep last 2 exchanges
+                {"role": "user", "content": query}
+            ]
+            
+            completion = client.chat.completions.create(
+                model="llama3-70b-8192",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=300,
+                stream=True
+            )
+            
+            response = "".join([chunk.choices[0].delta.content 
+                              for chunk in completion if chunk.choices[0].delta.content])
+            
+            self.history.extend([
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": response}
+            ])
+            self.save_history()
+            
+            return response.strip()
+            
+        except Exception as e:
+            print(f"Error: {e}")
+            return "Apologies, I encountered an error. Please try again."
 
-    try:
-        with open(r"Data\ChatLog.json", "r") as f:
-            message = load(f)
-
-        message.append({"role": "user", "content": f"{Query}"})
-
-        completion = client.chat.completions.create(
-            model = "llama3-70b-8192", messages = SystemChatBot + [{"role" : "system", "content": RealtimeInformation()}] + message, max_tokens = 1024, temperature = 0.7, top_p = 1, stream = True, stop = None
-        )
-
-        Answer = ""
-
-        for chunk in completion:
-            if chunk.choices[0].delta.content:
-                Answer += chunk.choices[0].delta.content
-
-        Answer = Answer.replace("<\\s>","")
-
-        message.append({"role": "assistant", "content": Answer})
-
-        with open(r"Data\ChatLog.json", "w") as f:
-            dump(message, f, indent = 4)
-
-        return AnswerModifier(Answer = Answer)
+if __name__ == "__main__":
+    assistant = EnhancedAssistant()
+    print(f"{Assistantname}: Hello! How can I help you today?")
     
-    except Exception as e:
-        print(f"Error: {e}")
-        with open(r"Data\ChatLog.json", "w") as f:
-            dump([], f, indent = 4)
-        return ChatBot(Query)
-    
-if __name__ =="__main__":
     while True:
-        user_input = input("Enter Your Question: ")
-        print(ChatBot(user_input))
+        try:
+            user_input = input(f"{Username}: ").strip()
+            if not user_input:
+                continue
+                
+            if user_input.lower() in ["exit", "quit"]:
+                print(f"{Assistantname}: Goodbye! Have a great day!")
+                break
+                
+            response = assistant.generate_response(user_input)
+            print(f"\n{Assistantname}: {response}\n")
+            
+        except KeyboardInterrupt:
+            print(f"\n{Assistantname}: Session ended abruptly.")
+            break
