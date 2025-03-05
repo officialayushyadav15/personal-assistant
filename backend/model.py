@@ -5,7 +5,6 @@ from functools import lru_cache
 from typing import List
 from dotenv import load_dotenv
 
-.
 
 class DecisionMaker:
     def __init__(self):
